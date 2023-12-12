@@ -1,0 +1,108 @@
+# load in libaries ----
+library(rvest) # for web scraping
+library(tidyverse) # for data wrangling
+library(janitor) # for tidying col names
+
+# the web scraping ----
+# read in url from pokemon database 
+pokemon_html <- read_html("https://pokemondb.net/pokedex/all")
+# convert table element to a html table > making into R data frame
+pokemon_tab <- pokemon_html %>%
+  html_node('table') %>%
+  html_table()
+
+# who are legendary ----
+# add legendary (includes mythical) T/F and which gen
+legendary <- c('Articuno', 'Zapdos', 'Moltres', 'Raikou', 'Entei', 'Suicune', 'Regirock',
+               'Regice', 'Registeel', 'Latias', 'Latios', 'Uxie', 'Mesprit', 'Azelf', 'Heatran', 
+               'Regigigas', 'Cresselia', 'Cobalion', 'Terrakion', 'Virizion', 'Tornadus', 'Thundurus',
+               'Landorus', 'Type: Null', 'Silvally', 'Tapu Koko', 'Tapu Lele', 'Tapu Bulu', 'Tapu Fini',
+               'Nihilego', 'Buzzwole', 'Pheromosa', 'Xurkitree', 'Celesteela', 'Kartana',
+               'Guzzlord', 'Poipole', 'Naganadel', 'Stakataka', 'Blacephalon', 'Kubfu',
+               'Urshifu', 'Regieleki', 'Regidrago', 'Glastrier', 'Spectrier', 'Mewtwo',
+               'Lugia', 'Ho-Oh', 'Kyogre', 'Groudon', 'Rayquaza', 'Dialga', 'Palkia', 'Giratina',
+               'Reshiram', 'Zekrom', 'Kyurem', 'Xerneas', 'Yveltal', 'Zygarde', 'Cosmog',
+               'Cosmoem', 'Solgaleo', 'Lunala', 'Necrozma', 'Zacian', 'Zamazenta', 'Eternatus',
+               'Calyrex', 'Mew', 'Celebi', 'Jirachi', 'Deoxys', 'Phione', 'Manaphy', 'Darkrai',
+               'Shaymin', 'Arceus', 'Victini', 'Keldeo', 'Meloetta', 'Genesect', 'Diancie', 
+               'Hoopa', 'Volcanion', 'Magearna', 'Marshadow', 'Zeraora', 'Meltan', 'Melmetal', 'Zarude',
+               'Koraidon', 'Miraidon', 'Great Tusk', 'Iron Treads', 'Wo-Chien', 'Chien-Pao',
+               'Ting-Lu', 'Chi-Yu', 'Roaring Moon', 'Iron Valiant', 'Walking Wake', 'Iron Leaves',
+               'Scream Tail', 'Brute Bonnet', 'Flutter Mane', 'Slither Wing', 'Sandy Shocks',
+               'Iron Bundle', 'Iron Hands', 'Iron Jugulis', 'Iron Moth', 'Iron Thorns')
+
+# Vectors for the generations ----
+gen1 <- 1:151
+gen2 <- 152:251
+gen3 <- 252:386
+gen4 <- 387:493
+gen5 <- 494:649
+gen6 <- 650:721
+gen7 <- 722:809
+gen8 <- 810:905
+
+# tidying up the data ----
+pokemon_full <- pokemon_tab |>
+  rename(number = "#") |>
+  clean_names() |>
+  # find the legendary pokemon - can also use `str_detect(pokemon_tab$Name, paste(legendary, collapse = "|"))`
+  mutate(legendary = name %in% legendary) |>
+  # add information to which generation of game the pokemon was first seen
+  mutate(generation = dplyr::case_when(
+    number %in% gen1 ~ 1,
+    number %in% gen2 ~ 2,
+    number %in% gen3 ~ 3,
+    number %in% gen4 ~ 4,
+    number %in% gen5 ~ 5,
+    number %in% gen6 ~ 6,
+    number %in% gen7 ~ 7,
+    number %in% gen8 ~ 8,
+    TRUE ~ 9
+  )) |>
+  # tidy up name and type by adding space before capital letters
+  mutate(name = stringr::str_replace(name, "(?<=[a-z])(?=[A-Z])", " "),
+         type = stringr::str_replace(type, "(?<=[a-z])(?=[A-Z])", " "))
+
+# split type column and keep original column
+type <- pokemon_full$type
+
+pokemon_full <- pokemon_full |>
+  tidyr::separate_wider_delim(cols = type,
+                              delim = " ",
+                              names = c("type1", "type2"),
+                              too_few = "align_start") %>%
+  mutate(type = type) %>%
+  select(number, name, type, everything())
+
+# remove duplicate names within the names ----
+# function detects duplicate strings and removes them
+remove_dup_name <- function(x){
+  paste(unique(tolower(trimws(unlist(strsplit(x, split = "(?!')[ [:punct:]]", fixed = F, perl = T))))), collapse = " ")
+}
+# vectorised version - likely more useful overall
+remove_dup_name_vect <- Vectorize(remove_dup_name, USE.NAMES = FALSE)
+
+# fix names
+pokemon_full <- pokemon_full |> 
+  dplyr::mutate(
+    name = remove_dup_name_vect(name) |> stringr::str_to_title()
+  )
+
+# add image urls from pokemon database ----
+# take the names, convert to lower case, add name to url path, remove spaces with - for non-standard pokemon
+url_names <- pokemon_full$name %>% tolower() %>%
+  paste0("https://img.pokemondb.net/sprites/home/normal/", .,".png") %>%
+  str_replace_all(fixed(" "), "-")
+
+# add to main dataset
+pokemon_full$image_url <- url_names
+
+# subset of standard pokemon ----
+# making a subset that excludes all the 'extra' pokemon like mega evolutions, Galarian versions and such
+pokemon <- pokemon_full |> 
+  filter(str_detect(name, "Mega|Alolan|Galarian|Primal|Partner|Altered|Eternamax|Hisuian", negate = TRUE))
+
+# write out full and filtered to csv format ----
+write_csv(pokemon, "data/pokemon_stats.csv")
+write_csv(pokemon_full, "data/pokemon_stats_full.csv")
+
